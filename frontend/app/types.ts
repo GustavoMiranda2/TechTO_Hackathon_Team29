@@ -31,8 +31,10 @@ export type Match = {
   key: string;
   title: string;
   score: number;
+  role_overview?: string;
   why: string;
   difficulty: string;
+  market_note?: string;
   have: string[];
   missing: string[];
   day_in_life: string;
@@ -46,8 +48,18 @@ export type Misalignment = {
   recommended_focus: string;
 };
 
+export type InferredProfile = {
+  situation: string;
+  skills: string;
+  interests: string;
+  goals: string;
+  experience_level: string;
+  desired_roles: string;
+};
+
 export type Diagnosis = {
   summary: string;
+  inferred_profile?: InferredProfile;
   matches: Match[];
   misalignment: Misalignment;
 };

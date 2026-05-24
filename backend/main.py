@@ -10,7 +10,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pypdf import PdfReader
 
 import agent
@@ -44,7 +44,9 @@ class Profile(BaseModel):
     desired_roles: str = Field(default="", max_length=1000)
 
 
-class SignupRequest(Profile):
+class SignupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     username: str = Field(min_length=3, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
     password: str = Field(min_length=8, max_length=128)
 
@@ -87,6 +89,13 @@ def _profile_of(user: dict) -> dict:
     return {f: user.get(f, "") for f in (*db.PROFILE_FIELDS, "last_summary")}
 
 
+def _ai_result(fn):
+    try:
+        return fn()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -94,7 +103,7 @@ def health():
 
 @app.post("/api/auth/signup")
 def signup(req: SignupRequest):
-    user = db.create_user(req.username, req.password, req.dict())
+    user = db.create_user(req.username, req.password)
     if user is None:
         raise HTTPException(status_code=409, detail="Username already taken")
     return user
@@ -122,7 +131,7 @@ def update_profile(req: Profile, authorization: Optional[str] = Header(None)):
     user = _user_from_header(authorization)
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    db.update_profile(user["id"], req.dict())
+    db.update_profile(user["id"], req.model_dump())
     return db.get_user_by_token(user["token"])
 
 
@@ -133,40 +142,54 @@ def interview(req: InterviewRequest, authorization: Optional[str] = Header(None)
         history = [{"role": "user", "content": "Start the interview with your first question."}]
     user = _user_from_header(authorization)
     if user:
-        result = agent.interview_turn(
-            history,
-            user.get("situation") or "recent_grad",
-            user.get("assistant_id"),
-            memory_on=True,
-            profile=_profile_of(user),
-            returning=bool(user.get("last_summary")),
+        situation = user.get("situation") or req.stage or "recent_grad"
+        if not user.get("situation") and req.stage:
+            db.set_situation(user["id"], req.stage)
+        result = _ai_result(
+            lambda: agent.interview_turn(
+                history,
+                situation,
+                user.get("assistant_id"),
+                memory_on=True,
+                profile=_profile_of(user),
+                returning=bool(user.get("last_summary")),
+            )
         )
         if result.get("assistant_id") and not user.get("assistant_id"):
             db.set_assistant_id(user["id"], result["assistant_id"])
         return result
-    return agent.interview_turn(history, req.stage, req.assistant_id, req.memory_on)
+    return _ai_result(
+        lambda: agent.interview_turn(history, req.stage, req.assistant_id, req.memory_on)
+    )
 
 
 @app.post("/api/diagnose")
 def diagnose(req: DiagnoseRequest, authorization: Optional[str] = Header(None)):
     user = _user_from_header(authorization)
     if user:
-        data = agent.diagnose(
-            req.transcript,
-            req.resume,
-            user.get("situation") or "recent_grad",
-            user.get("assistant_id"),
-            memory_on=True,
-            profile=_profile_of(user),
+        data = _ai_result(
+            lambda: agent.diagnose(
+                req.transcript,
+                req.resume,
+                user.get("situation") or "recent_grad",
+                user.get("assistant_id"),
+                memory_on=True,
+                profile=_profile_of(user),
+            )
         )
         db.set_last_summary(user["id"], data.get("summary", ""))
-        messages_json = json.dumps([m.dict() for m in req.messages])
+        inferred_profile = data.get("inferred_profile")
+        if isinstance(inferred_profile, dict):
+            db.save_inferred_profile(user["id"], inferred_profile)
+        messages_json = json.dumps([m.model_dump() for m in req.messages])
         db.save_session(
             user["id"], data.get("summary", ""), messages_json, json.dumps(data)
         )
         return data
-    return agent.diagnose(
-        req.transcript, req.resume, req.stage, req.assistant_id, req.memory_on
+    return _ai_result(
+        lambda: agent.diagnose(
+            req.transcript, req.resume, req.stage, req.assistant_id, req.memory_on
+        )
     )
 
 
@@ -197,7 +220,7 @@ def session_detail(session_id: int, authorization: Optional[str] = Header(None))
 
 @app.post("/api/roadmap")
 def roadmap(req: RoadmapRequest):
-    return agent.build_roadmap(req.path_key, req.have_skills, req.context)
+    return _ai_result(lambda: agent.build_roadmap(req.path_key, req.have_skills, req.context))
 
 
 @app.post("/api/parse-resume")

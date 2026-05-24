@@ -90,7 +90,7 @@ ROADMAPS = {
 def list_paths_for_prompt() -> str:
     lines = []
     for key, p in ROADMAPS.items():
-        lines.append(f'- "{key}" — {p["title"]}: {p["summary"]}')
+        lines.append(f'- "{key}" - {p["title"]}: {p["summary"]}')
     return "\n".join(lines)
 
 

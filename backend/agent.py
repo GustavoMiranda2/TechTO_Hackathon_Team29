@@ -53,6 +53,10 @@ def _complete(
         if data.get("status") != "COMPLETED":
             raise RuntimeError(data.get("content", "Backboard request failed"))
         return data["content"], data.get("assistant_id")
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "AI provider key is not configured. Set BACKBOARD_API_KEY or ANTHROPIC_API_KEY in backend/.env."
+        )
     response = anthropic_client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=max_tokens,
@@ -63,14 +67,16 @@ def _complete(
 
 SITUATION_GUIDANCE = {
     "student": (
-        "This person is STILL STUDYING. Ask exploration questions: which subjects light "
-        "them up, what they are curious to try, what they daydream about building. Help "
-        "them aim and specialize; do not push them to step into a role yet."
+        "This person is STILL STUDYING or just entering tech. Assume they may not know "
+        "much yet. Keep questions simple, check whether programming basics feel exciting "
+        "or frustrating, and guide them toward foundations such as programming logic, "
+        "problem solving, basic web, data, security, or support before narrowing too hard."
     ),
     "recent_grad": (
-        "This person RECENTLY GRADUATED with little real-world experience. Ask readiness "
-        "questions: what work they enjoyed in school or projects, what they want their "
-        "day-to-day to look like. Help them find a first direction to step into."
+        "This person HAS GRADUATED or is close to graduation. Assume they know some tech "
+        "and may already know what they like, but still need help choosing a career "
+        "direction. Ask about projects, classes, tools, tradeoffs, work style, and the "
+        "kind of role they can picture occupying."
     ),
     "transition": (
         "This person is a PROFESSIONAL IN TRANSITION moving toward a new area of tech. "
@@ -93,9 +99,11 @@ SITUATION_ALIAS = {"graduated": "recent_grad"}
 
 RETURNING_NOTE = (
     "This is a RETURNING user you have helped before. Do NOT re-ask the basic discovery "
-    "questions you already know from their profile below. Greet them warmly, acknowledge "
-    "you remember them, then ask what has CHANGED since last time: new skills learned, new "
-    "projects built, shifted goals, or curiosity about a different area. Keep it short."
+    "questions you already know from their profile or previous questionnaire below. Greet "
+    "them warmly, acknowledge you remember the last direction, then ask how it went and "
+    "what changed: what they disliked, what they liked, new skills learned, shifted goals, "
+    "or curiosity about a different area. Use old answers plus new answers for the next "
+    "recommendation. Keep it short."
 )
 
 PROFILE_LABELS = [
@@ -127,15 +135,35 @@ def _profile_block(profile: dict | None) -> str:
     return "KNOWN PROFILE OF THIS PERSON:\n" + "\n".join(lines)
 
 
-INTERVIEW_SYSTEM = """You are CareerCompass, a warm, sharp IT career guide. You talk to \
-someone who already codes a bit but is unsure which IT direction fits them.
+INTERVIEW_SYSTEM = """You are CareerCompass, a warm, direct, and understanding IT career \
+guide. You help someone discover which tech direction fits them.
 
 Your only job now is to interview them to discover WHAT THEY LOVE DOING, so you can later \
 point them to a direction. You decide every question yourself and adapt to this person; \
 never follow a fixed script and never recommend roles yet.
 
+INTERNAL DISCOVERY SKILLS:
+- situation: whether they are still studying, close to graduation, graduated, changing \
+careers, or already working in tech
+- familiarity: languages, tools, school subjects, projects, or concepts they have touched
+- curiosity: what they are curious about, even if they have more than one curiosity
+- energy: tasks they enjoy, tasks that drain them, and what kind of problems pull them in
+- work style: solo or team, deep focus or variety, visual building, logic, data, security, \
+automation, helping people, or infrastructure
+- goals: what they want next, what they do not want, and what would make the path feel worth it
+- student basics: whether programming logic, building tiny apps, debugging, and learning \
+fundamentals feel interesting enough to keep exploring
+- graduate direction: which role families fit their projects, preferences, strengths, and \
+market-readiness
+
+Use these skills silently as the questionnaire targets. You must collect enough signal to \
+answer them by the end, but do not ask these items as a checklist and do not expose this \
+list to the user.
+
 How to ask:
 - ONE short question per turn. Keep every message under two sentences to respect their time.
+- The person can choose more than one option. Remind them often that multiple answers are \
+welcome, especially when asking about languages, tools, interests, or goals.
 - Make each question concrete by giving 3-4 example answers in parentheses, so they know \
 what kind of thing they can say. Example: "What kind of work pulls you in most? (e.g., \
 building things people use, digging into data, automating boring tasks, breaking and \
@@ -149,6 +177,9 @@ Uncover over about 5-6 short exchanges:
 - tools or languages they liked touching
 - solo vs team, deep focus vs variety
 - what they do NOT want
+- for students: whether they should first explore programming logic, fundamentals, and tiny \
+beginner projects before choosing a role
+- for graduates: which career family is realistic and attractive enough to explore now
 
 When you have enough signal, set "done" to true and make the final message ONE short \
 sentence (e.g., "Got it, I have enough to find your direction."). Never summarize the \
@@ -175,13 +206,23 @@ Available career paths (use these exact keys):
 Respond ONLY with valid JSON in this exact shape:
 {{
   "summary": "2-3 sentence vision of who this person could become and the direction that fits them",
+  "inferred_profile": {{
+    "situation": "student | recent_grad | transition | working | new_career",
+    "experience_level": "beginner | some | experienced",
+    "skills": "comma-separated languages, tools, subjects, concepts, or strengths they mentioned",
+    "interests": "comma-separated areas, activities, and problems they seem drawn to",
+    "goals": "short plain-English summary of what they want next",
+    "desired_roles": "comma-separated career directions or role families that fit the diagnosis"
+  }},
   "matches": [
     {{
       "key": "one of the path keys",
       "title": "human title",
       "score": 0-100,
+      "role_overview": "what this role generally does, in plain language",
       "why": "why this person could thrive and grow into this role, referencing their own words",
       "difficulty": "Reachable now | Needs some prep | Aspirational",
+      "market_note": "a short general note on employability or competition, without salary claims or pretending to use live market data",
       "have": ["strengths or interests that already point them toward this path"],
       "missing": ["what they would grow into or learn to occupy this role"],
       "day_in_life": "a vivid 2-3 sentence Tuesday in this role, so they can picture being there"
@@ -198,6 +239,8 @@ Respond ONLY with valid JSON in this exact shape:
 
 This is about guiding someone to discover an occupation they could love, never about \
 finding a job opening or applying. Never mention recruiters, applications, or vacancies.
+If the person is a student or very new, include at least one path whose first step is \
+programming logic, fundamentals, and a tiny beginner project before specialization.
 Return 3 matches, ordered by score descending."""
 
 

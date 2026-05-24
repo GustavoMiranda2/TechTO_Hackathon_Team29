@@ -6,6 +6,7 @@ backend/.env
 # Database
 *.db
 backend/careercompass.db
+logs/
 
 # Python
 backend/venv/

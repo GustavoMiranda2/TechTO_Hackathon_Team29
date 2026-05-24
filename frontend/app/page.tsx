@@ -29,6 +29,53 @@ function errMsg(e: unknown): string {
   return `${base}. Check that the backend is running and the AI key is set.`;
 }
 
+function StagePicker({
+  onPick,
+}: {
+  onPick: (stage: Stage) => void;
+}) {
+  return (
+    <div className="stage-pick">
+      <button className="stage-card" onClick={() => onPick("student")}>
+        <span className="stage-emoji">01</span>
+        <span className="stage-title">I am still studying</span>
+        <span className="stage-sub">
+          Start with simple questions and foundations
+        </span>
+      </button>
+      <button className="stage-card" onClick={() => onPick("graduated")}>
+        <span className="stage-emoji">02</span>
+        <span className="stage-title">I have graduated</span>
+        <span className="stage-sub">Find a career direction to explore now</span>
+      </button>
+    </div>
+  );
+}
+
+function ProgressRail({ phase }: { phase: Phase }) {
+  const steps = [
+    ["welcome", "Start"],
+    ["interview", "Interview"],
+    ["diagnosis", "Match"],
+    ["roadmap", "Plan"],
+  ];
+  const phaseIndex = phase === "auth" ? 0 : phase === "resume" || phase === "diagnosing" ? 2 : steps.findIndex(([key]) => key === phase);
+  const activeIndex = Math.max(0, phaseIndex);
+  return (
+    <div className="progress-rail">
+      {steps.map(([, label], index) => (
+        <div
+          key={label}
+          className={`progress-step ${index <= activeIndex ? "active" : ""}`}
+        >
+          <span>{index + 1}</span>
+          {label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Home() {
   const [phase, setPhase] = useState<Phase>("welcome");
   const [user, setUser] = useState<User | null>(null);
@@ -99,13 +146,17 @@ export default function Home() {
     return user ? user.situation || "recent_grad" : guestStage;
   }
 
-  async function begin() {
+  async function begin(stageOverride?: Stage) {
+    const stage = stageOverride || stageArg();
+    if (stageOverride && user) {
+      setUser({ ...user, situation: stageOverride });
+    }
     setError(null);
     setMessages([]);
     setPhase("interview");
     setBusy(true);
     try {
-      const res = await api.interview([], stageArg());
+      const res = await api.interview([], stage);
       setMessages([{ role: "assistant", content: res.message }]);
     } catch (e) {
       setError(errMsg(e));
@@ -168,6 +219,9 @@ export default function Home() {
     try {
       const data = await api.diagnose(transcript, resume, stageArg(), messages);
       setDiagnosis(data);
+      if (user && data.inferred_profile) {
+        setUser({ ...user, ...data.inferred_profile, last_summary: data.summary });
+      }
       setPhase("diagnosis");
     } catch (e) {
       setError(errMsg(e));
@@ -208,15 +262,28 @@ export default function Home() {
 
   return (
     <div className="shell">
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
       <div className="brand">
-        <div className="brand-dot" />
-        <h1>CareerCompass AI</h1>
+        <div className="brand-left">
+          <div className="brand-dot" />
+          <div>
+            <h1>CareerCompass AI</h1>
+            <span>IT career direction agent</span>
+          </div>
+        </div>
+        <div className="status-pill">
+          <span />
+          Backboard online
+        </div>
         {user && (
           <button className="link-btn brand-logout" onClick={logout}>
             Log out
           </button>
         )}
       </div>
+
+      <ProgressRail phase={phase} />
 
       {error && <div className="error-banner">{error}</div>}
 
@@ -231,12 +298,19 @@ export default function Home() {
               </h2>
               <p>
                 {returning
-                  ? "Let's check in on how your journey has evolved since last time."
-                  : "Let's find the direction that fits you. I'll remember everything for next time."}
+                  ? "Let's compare what changed since your last direction and tune the next recommendation."
+                  : "Choose a starting point. I will save your preferences after the interview, not before it."}
               </p>
-              <button className="btn" onClick={begin}>
-                {returning ? "Start a check-in" : "Start career diagnosis"}
-              </button>
+              {!returning && !user.situation ? (
+                <>
+                  <div className="guest-divider">choose your starting point</div>
+                  <StagePicker onPick={begin} />
+                </>
+              ) : (
+                <button className="btn" onClick={() => begin()}>
+                  {returning ? "Start a check-in" : "Start career diagnosis"}
+                </button>
+              )}
               {sessions.length > 0 && (
                 <div className="history">
                   <div className="section-title">Your past sessions</div>
@@ -258,40 +332,18 @@ export default function Home() {
           ) : (
             <>
               <h2>
-                Don&apos;t search for jobs.
+                Stop guessing your path.
                 <br />
                 <span className="grad">Find where you fit.</span>
               </h2>
               <p>
-                You already code a bit. The hard part is knowing which direction
-                is yours. Let&apos;s figure that out together.
+                A guided AI interview that turns your interests, skills, and goals into a practical IT career direction.
               </p>
               <button className="btn" onClick={() => setPhase("auth")}>
                 Sign in / Create account
               </button>
               <div className="guest-divider">or continue as guest</div>
-              <div className="stage-pick">
-                <button
-                  className="stage-card"
-                  onClick={() => beginGuest("student")}
-                >
-                  <span className="stage-emoji">🎓</span>
-                  <span className="stage-title">I&apos;m still studying</span>
-                  <span className="stage-sub">
-                    Find a direction to aim for
-                  </span>
-                </button>
-                <button
-                  className="stage-card"
-                  onClick={() => beginGuest("graduated")}
-                >
-                  <span className="stage-emoji">🚀</span>
-                  <span className="stage-title">I&apos;ve graduated</span>
-                  <span className="stage-sub">
-                    Find a role to step into now
-                  </span>
-                </button>
-              </div>
+              <StagePicker onPick={beginGuest} />
             </>
           )}
         </div>
@@ -303,6 +355,13 @@ export default function Home() {
 
       {phase === "interview" && (
         <>
+          <div className="chat-header">
+            <div>
+              <p className="section-title">Adaptive interview</p>
+              <h2>Answer naturally. Multiple answers are welcome.</h2>
+            </div>
+            <span>{messages.length} messages</span>
+          </div>
           <div className="chat">
             {messages.map((m, i) => (
               <div key={i} className={`bubble ${m.role === "user" ? "user" : "bot"}`}>
@@ -321,7 +380,7 @@ export default function Home() {
           <div className="composer">
             <textarea
               value={input}
-              placeholder="Type your answer…"
+              placeholder="Type your answer..."
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -338,11 +397,16 @@ export default function Home() {
       )}
 
       {phase === "resume" && (
-        <div>
-          <div className="section-title">One last thing (optional)</div>
+        <div className="resume-panel">
+          <div>
+            <div className="section-title">One last thing</div>
+            <h2>Resume is optional</h2>
+            <p>
+              Add it only if you want me to compare your background with the direction you described.
+            </p>
+          </div>
           <div className="uploader">
-            Drop your resume so I can spot the gap between what it says and what
-            you actually want.
+            Drop a PDF resume here, or continue without one.
             <input type="file" accept="application/pdf" onChange={onResumeFile} />
           </div>
           {resume && (
@@ -361,7 +425,7 @@ export default function Home() {
       {phase === "diagnosing" && (
         <div className="hero">
           <div className="spinner" />
-          <p>Reading everything you told me and finding your direction…</p>
+          <p>Reading everything you told me and finding your direction...</p>
         </div>
       )}
 
@@ -370,10 +434,11 @@ export default function Home() {
           <DiagnosisView
             data={diagnosis}
             selectedKey={selected?.key || null}
+            saved={Boolean(user)}
             onSelect={pickPath}
           />
           <p className="center" style={{ color: "var(--muted)", marginTop: 8 }}>
-            {busy ? "Building your study plan…" : "Tap a path to get your study plan"}
+            {busy ? "Building your study plan..." : "Tap a path to get your study plan"}
           </p>
         </div>
       )}
@@ -383,7 +448,7 @@ export default function Home() {
           <RoadmapView data={roadmap} />
           <div className="row" style={{ marginTop: 16 }}>
             <button className="btn btn-ghost" onClick={() => setPhase("diagnosis")}>
-              ← Back to my paths
+              Back to my paths
             </button>
             <button className="btn btn-ghost" onClick={reset}>
               Start over

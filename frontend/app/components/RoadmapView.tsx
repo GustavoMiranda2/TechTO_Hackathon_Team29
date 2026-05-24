@@ -11,7 +11,7 @@ export default function RoadmapView({ data }: { data: Roadmap }) {
         target="_blank"
         rel="noreferrer"
       >
-        Full study map on roadmap.sh →
+        Full study map on roadmap.sh
       </a>
 
       <div className="skill-cols" style={{ marginTop: 20 }}>

@@ -41,12 +41,6 @@ async function get<T>(path: string): Promise<T> {
 export type SignupPayload = {
   username: string;
   password: string;
-  situation: string;
-  skills: string;
-  interests: string;
-  goals: string;
-  experience_level: string;
-  desired_roles: string;
 };
 
 export function signup(payload: SignupPayload) {

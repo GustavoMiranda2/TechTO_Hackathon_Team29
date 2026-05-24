@@ -73,9 +73,10 @@ def _public(row: sqlite3.Row) -> dict:
     return data
 
 
-def create_user(username: str, password: str, profile: dict) -> Optional[dict]:
+def create_user(username: str, password: str, profile: Optional[dict] = None) -> Optional[dict]:
     salt = secrets.token_hex(8)
     token = secrets.token_hex(16)
+    profile = profile or {}
     values = [profile.get(f, "") for f in PROFILE_FIELDS]
     try:
         with _connect() as conn:
@@ -122,6 +123,16 @@ def update_profile(user_id: int, profile: dict) -> None:
     values = [profile.get(f, "") for f in PROFILE_FIELDS]
     with _connect() as conn:
         conn.execute(f"UPDATE users SET {sets} WHERE id = ?", [*values, user_id])
+
+
+def save_inferred_profile(user_id: int, profile: dict) -> None:
+    clean = {f: str(profile.get(f, "") or "")[:1000] for f in PROFILE_FIELDS}
+    update_profile(user_id, clean)
+
+
+def set_situation(user_id: int, situation: str) -> None:
+    with _connect() as conn:
+        conn.execute("UPDATE users SET situation = ? WHERE id = ?", (situation, user_id))
 
 
 def set_assistant_id(user_id: int, assistant_id: str) -> None:
